@@ -1,0 +1,17 @@
+.vscode/
+.idea/
+
+.claude/
+CLAUDE.md
+
+# 编译产物：每节目录里只保留源码、脚本和文档
+/*/*
+!/*/*.c
+!/*/*.h
+!/*/*.sh
+!/*/*.md
+!/*/*.go
+!/*/Makefile
+*.o
+perf.data*
+core*
