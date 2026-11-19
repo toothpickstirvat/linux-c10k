@@ -1,0 +1,30 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "普通构建（-O2 -g）",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build"
+    },
+    {
+      "name": "asan",
+      "displayName": "AddressSanitizer + UBSan",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": { "SAN": "ON" }
+    },
+    {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/build-tsan",
+      "cacheVariables": { "TSAN": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" }
+  ]
+}

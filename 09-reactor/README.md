@@ -40,5 +40,5 @@
 
 ## 自查方法
 
-- `make SAN=1` 编译，压测 + 随机断开，ASan 不报错。
+- 用 `asan` preset 编译（`cmake --build --preset asan --target 09_reactor`），压测 + 随机断开，ASan 不报错。
 - 慢客户端不会让服务器内存无限增长，空闲连接 30 秒后被关闭。

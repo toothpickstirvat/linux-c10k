@@ -11,7 +11,11 @@ CLAUDE.md
 !/*/*.sh
 !/*/*.md
 !/*/*.go
-!/*/Makefile
+!/*/CMakeLists.txt
+!/cmake/*.cmake
 *.o
+
+# CMake 构建目录
+/build*/
 perf.data*
 core*

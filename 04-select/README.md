@@ -26,8 +26,8 @@ select 是最早的 I/O 多路复用：把一组 fd 交给内核，内核在任�
 ### 任务 B：撞 1024 的墙
 
 1. 用第 2 节的 `many.c` 建 1100 个连接，看服务器在 fd 号到 1024 时发生什么。
-2. Ubuntu 的 gcc 在 `-O2` 下默认开了 `_FORTIFY_SOURCE`，对 `FD_SET` 越界有运行时检查。分别用默认参数和 `-U_FORTIFY_SOURCE` 编译，对比现象。
-   （不开检查时越界写的是栈上的别的变量，这是真实的内存破坏 bug，用 `make SAN=1` 看 ASan 怎么报。）
+2. Ubuntu 的 gcc 在 `-O2` 下默认开了 `_FORTIFY_SOURCE`，对 `FD_SET` 越界有运行时检查。CMake 会同时编出两个版本：`server_select`（默认，开检查）和 `server_select_nofortify`（加了 `-U_FORTIFY_SOURCE`），对比现象。
+   （不开检查时越界写的是栈上的别的变量，这是真实的内存破坏 bug，用 `cmake --build --preset asan` 编译后运行 `./build-asan/04-select/server_select_nofortify`，看 UBSan 怎么报数组越界。）
 
 ### 任务 C：量一量 O(n)
 

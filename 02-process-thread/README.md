@@ -49,4 +49,4 @@
 
 - 多个 `nc` 同时连接，都能各自回显。
 - fork 版客户端全部断开后，`ps` 里没有 `<defunct>` 的僵尸进程。
-- 线程版用 `make TSAN=1 -B 02-process-thread/server_thread` 编译（ThreadSanitizer），多个客户端并发收发时没有报 data race。
+- 线程版用 `cmake --preset tsan && cmake --build --preset tsan --target 02_server_thread` 编译（ThreadSanitizer），运行 `./build-tsan/02-process-thread/server_thread`，多个客户端并发收发时没有报 data race。

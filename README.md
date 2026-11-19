@@ -15,19 +15,41 @@ goroutine"。
   指令进入内核，理解"系统调用的代价"从哪来。不需要写汇编。
 - **第 10 节用 Go**：读 Go runtime 的 netpoll 源码，和上一门 go-concurrency 课程连起来。
 
-工具（本机已有）：`gcc 15.2`、`make`、`gdb`、`strace`、`perf`、`ss`、`nc`、`objdump`。
+工具（本机已有）：`gcc 15.2`、`cmake 4.2`、`gdb`、`strace`、`perf`、`ss`、`nc`、`objdump`。
 没有 `wrk`、`ab` 这类压测工具，第 8 节自己写一个压测客户端，这本身就是练 epoll 的好机会。
 
 ### 编译
 
-在项目根目录执行，可执行文件会放在源码旁边，`.gitignore` 已经排除了它们：
+用 CMake 构建。根目录的 `CMakeLists.txt` 统一管理第 1–9 节，每节目录里也有自己的 `CMakeLists.txt`，可以单独构建；
+公共编译参数在 `cmake/common.cmake`。第 10 节是 Go，直接 `go run`。
+
+**每节目录里的每个 `.c` 文件会自动编译成一个同名可执行文件**，不用改 CMakeLists.txt。目标名是"课号_文件名"，
+比如 `01-blocking-echo/server.c` 的目标是 `01_server`，可执行文件是 `build/01-blocking-echo/server`。
 
 ```bash
-make 01-blocking-echo/server            # 编译 01-blocking-echo/server.c
-make SAN=1 -B 01-blocking-echo/server   # 加 AddressSanitizer + UBSan，查内存错误
-make TSAN=1 -B 02-process-thread/server_thread   # 加 ThreadSanitizer，查数据竞争
-make clean                              # 删除所有可执行文件
+# 第一次：配置（三种构建各用一个目录，互不影响）
+cmake --preset default        # 普通构建 -O2 -g，目录 build/
+cmake --preset asan           # AddressSanitizer + UBSan，目录 build-asan/
+cmake --preset tsan           # ThreadSanitizer，目录 build-tsan/
+
+# 编译
+cmake --build --preset default                    # 编译全部
+cmake --build --preset default --target 01_server # 只编译一个
+./build/01-blocking-echo/server
+
+cmake --build --preset asan --target 01_server    # 查越界、use-after-free
+./build-asan/01-blocking-echo/server
+cmake --build --preset tsan --target 02_server_thread   # 查多线程数据竞争
+./build-tsan/02-process-thread/server_thread
+
+# 单独构建某一节
+cmake -S 01-blocking-echo -B build-01 && cmake --build build-01
 ```
+
+注意：**新建了 `.c` 文件后，第一次要不带 `--target` 编译一次**（或重新 `cmake --preset default`），CMake 才会发现
+新文件、生成新目标；之后就可以用 `--target` 单独编译了。
+
+构建目录 `build*/` 已经在 `.gitignore` 里。根目录会生成 `build/compile_commands.json`，VS Code 的 clangd 插件可以直接用。
 
 ---
 
