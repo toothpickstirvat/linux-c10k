@@ -11,6 +11,7 @@ CLAUDE.md
 !/*/*.sh
 !/*/*.md
 !/*/*.go
+!/*/*.py
 !/*/CMakeLists.txt
 !/cmake/*.cmake
 *.o

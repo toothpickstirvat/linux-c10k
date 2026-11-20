@@ -2,48 +2,158 @@
 
 ## 为什么学
 
-select 是最早的 I/O 多路复用：把一组 fd 交给内核，内核在任意一个就绪（可读/可写/异常）或超时时返回。
-线程阻塞在 select 上，不占 CPU，解决了第 3 节的空转问题。它的几个限制，正是 poll 和 epoll 出现的原因。
+select是最早的I/O多路复用：把一组fd交给内核，内核在任意一个就绪（可读/可写/异常）或超时时返回。
+线程阻塞在select上，不占CPU，解决了第3节的空转问题。它的几个限制，正是poll和epoll出现的原因。
 
 ---
 
 ## 要学的内容
 
 1. `fd_set` 是一个位图，`FD_ZERO`/`FD_SET`/`FD_ISSET`/`FD_CLR`
-2. `select(nfds, &rfds, &wfds, &efds, &timeout)`：nfds 是**最大 fd + 1**，不是 fd 的个数
-3. select 返回后会**改写**传进去的 fd_set，只留下就绪的位，所以每次循环都要重新设置
-4. 限制：fd 号不能大于等于 `FD_SETSIZE`（本机 1024）；每次调用都把整个位图拷进内核、内核和用户态都要扫一遍，O(n)
+2. `select(nfds, &rfds, &wfds, &efds, &timeout)`：nfds 是**最大 fd + 1**，不是fd的个数
+3. select返回后会**改写**传进去的fd_set，只留下就绪的位，所以每次循环都要重新设置
+4. 限制：fd号不能大于等于`FD_SETSIZE`（本机1024）；每次调用都把整个位图拷进内核、内核和用户态都要扫一遍，O(n)
 
 ---
 
 ## 任务
 
-### 任务 A：select 版 echo 服务器
+### 任务 A：select版echo服务器
 
-`server_select.c`：单线程，用一个数组记录所有客户端 fd。每轮循环：清空 fd_set，加入 listenfd 和所有客户端 fd，算出最大 fd，调用 select，
-然后依次检查哪些 fd 就绪。
+`server_select.c`：单线程，用一个数组记录所有客户端fd。每轮循环：清空fd_set，加入listenfd和所有客户端fd，算出最大fd，调用select，然后依次检查哪些fd就绪。
 
-### 任务 B：撞 1024 的墙
+> **实测：** 3个`nc`同时回显正常；空闲时CPU 0%（第3节不休眠时是100%）、`NLWP`为1；
+> 200个并发连接回显全部正确，全部断开后只剩1个监听socket、没有`CLOSE-WAIT`。
 
-1. 用第 2 节的 `many.c` 建 1100 个连接，看服务器在 fd 号到 1024 时发生什么。
-2. Ubuntu 的 gcc 在 `-O2` 下默认开了 `_FORTIFY_SOURCE`，对 `FD_SET` 越界有运行时检查。CMake 会同时编出两个版本：`server_select`（默认，开检查）和 `server_select_nofortify`（加了 `-U_FORTIFY_SOURCE`），对比现象。
-   （不开检查时越界写的是栈上的别的变量，这是真实的内存破坏 bug，用 `cmake --build --preset asan` 编译后运行 `./build-asan/04-select/server_select_nofortify`，看 UBSan 怎么报数组越界。）
+### 任务 B：撞1024的墙
+
+1. 用第2节的`many.c`建1100个连接，看服务器在fd号到1024时发生什么。
+2. Ubuntu的gcc在 `-O2`下默认开了`_FORTIFY_SOURCE`，对`FD_SET`越界有运行时检查。CMake会同时编出两个版本：
+   `server_select`（默认，开检查）和`server_select_nofortify`（加了`-U_FORTIFY_SOURCE`），对比现象。
+   （不开检查时越界写的是栈上的别的变量，这是真实的内存破坏bug，用`cmake --build --preset asan`编译后运行
+   `./build-asan/04-select/server_select_nofortify`，看UBSan怎么报数组越界。）
+
+> **先调高fd上限：** 很多终端默认`ulimit -n`是1024，这时fd号最大只到1023，根本撞不上这堵墙（见"踩过的坑"3）。
+> 运行服务器和`many`的终端都要先`ulimit -n 4096`。
+>
+> **实测（1100个连接）：**
+>
+> | 版本 | 现象 |
+> |---|---|
+> | `server_select`（FORTIFY） | 打印到`fd=1003`后，`*** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated`，退出码134（128+6，SIGABRT） |
+> | `server_select_nofortify` | 不退出，fd一直到1103；再连一个`nc`**居然有回显** |
+> | ASan版`server_select_nofortify` | fd一到1024就报`stack-buffer-overflow`并终止 |
+>
+> ASan报告的关键几行：
+>
+> ```
+> server_select.c:129:18: runtime error: index 16 out of bounds for type '__fd_mask [16]'
+> READ of size 8 at 0x743d89a70100 thread T0
+>   [128, 256) 'rfds' (line 77) <== Memory access at offset 256 overflows this variable
+>   [288, 304) 'ip' (line 115)
+>   [320, 1344) 'buf' (line 76)
+> ```
+>
+> - `fd_set`内部是16个`long`，16×64=1024位。fd 1024落在第17个`long`上（下标16），越界。
+> - 越界首先发生在第129行的`FD_ISSET`（读），而不是第85行的`FD_SET`：fd 1024是在**这一轮**的accept里得到的，
+>   同一轮处理客户端时就对它`FD_ISSET`了，`FD_SET`要到下一轮才执行。越界的其实有三处：`FD_SET`、`FD_ISSET`、内核里的`select`。
+> - **为什么nofortify版有回显：** `FD_SET(1100)`把`rfds`外面某个变量（这里是`ip`或`buf`的内存）的一位写成1，
+>   `select(maxfd+1)`让内核按同样的越界位置读写，`FD_ISSET`又从同一位置读回来，三次越界恰好对上了。
+>   被改的是`buf`这类每次都会被覆盖的缓冲区时看不出问题；换成`maxfd`、`nclient`或指针，就会漏连接、死循环或崩溃。
+>   **"测试全过"是最危险的结果**：换编译器版本、改变量顺序、开关优化，症状都可能变。FORTIFY把悄悄出错变成当场终止。
 
 ### 任务 C：量一量 O(n)
 
-开 1000 个空闲连接，只有 1 个在不停收发。用 `perf stat` 或 `strace -c` 看服务器每次 select 的开销，和只开 10 个连接时比。
+开1000个空闲连接，只有1个在不停收发，测这个活跃连接的往返延迟，和只开10个空闲连接时比。
+
+`perf stat`在本机用不了（`perf_event_paranoid=4`，普通用户没权限）；`strace`会把每次往返拖慢到几百微秒，
+测出来的主要是strace自己的开销。所以直接测往返延迟，活跃客户端是`active.py`：
+
+```bash
+# 终端1、2都先 ulimit -n 4096
+./build/04-select/server_select > /dev/null                 # 终端1
+./build/02-process-thread/many 127.0.0.1 9000 1000          # 终端2（另一次用10）
+python3 04-select/active.py                                 # 终端3：2万次往返的平均延迟
+```
+
+> **实测：**
+>
+> | 空闲连接数 | 你的机器 | 我的测量（3次） |
+> |---|---|---|
+> | 10 | 86.7 微秒 | 55.7、68.2、54.6 微秒 |
+> | 1000 | 173.7 微秒 | 186.8、186.1、179.0 微秒 |
+>
+> 多了990个**完全不发数据**的连接，唯一活跃连接的延迟翻了2～3倍。select每轮的开销取决于连接总数，和活跃连接数无关。
 
 ---
 
 ## 写之前先想清楚
 
-1. 为什么 select 返回后必须重新 `FD_SET`？如果只在开头设置一次会怎样？
-2. nfds 传错（比如传成连接数）会漏掉哪些 fd？
-3. 1000 个连接里只有 1 个活跃，select 每轮要做多少无用功？用户态和内核各扫了几遍？
+1. 为什么select返回后必须重新`FD_SET`？如果只在开头设置一次会怎样？
+
+   > **答：** `fd_set`既是输入也是输出。select返回时把它**改写**成只剩就绪的位。只在开头设置一次的话，
+   > 第一次返回后位图里只剩当时就绪的那几个fd，其余连接从此不再被监视：有数据也收不到，断开也发现不了。
+   > 所以`rfds`只能当作每轮临时交给内核的"问题清单"，连接列表要自己用数组保存，每轮重新生成位图。
+2. nfds传错（比如传成连接数）会漏掉哪些fd？
+
+   > **答：** 内核只检查`[0, nfds)`这些位。fd号是从3、4、5……开始分配的（0、1、2是标准输入输出），
+   > 而且有连接关闭后号码不连续，所以最大fd总是大于连接数。传成连接数`n`时，fd号`≥ n`的那些连接全部漏掉：
+   > 比如3个客户端fd是4、5、6，`nclient + 1 = 4`，内核只看fd 0～3，监听socket（3）还在，但三个客户端都收不到数据。
+   > 必须传"最大fd + 1"，而且每轮重新算，因为最大的那个连接可能关了。
+3. 1000个连接里只有1个活跃，select每轮要做多少无用功？用户态和内核各扫了几遍？
+
+   > **答：** 每处理1个就绪事件，要扫三遍、约3000次检查，只有1次有用：
+   > 1. 用户态：对1000个fd逐个`FD_SET`生成位图，再把整个位图拷进内核；
+   > 2. 内核：从fd 0扫到`maxfd`，对每个fd检查是否就绪，把结果拷回用户态；
+   > 3. 用户态：对1000个fd逐个`FD_ISSET`，找出那1个就绪的。
+   >
+   > 任务C的实测就是这份固定开销：空闲连接越多，每轮越重。理想的接口应该是"内核直接告诉我哪几个就绪了"，
+   > 不用每次把全部fd交进去再扫一遍，这就是第6节的epoll。第5节的poll解决了1024的上限，但这个O(n)还在。
+
+4. `fd_set`的大小是固定的，`sizeof(fd_set)`是多少，能放多少个fd？
+
+   > **答：** 128字节，即1024位，能放fd 0～1023（服务器启动时会打印`FD_SETSIZE=1024，sizeof(fd_set)=128 字节`）。
+   > 限制的是**fd号**，不是连接个数：即使只有10个连接，只要进程别处占了很多fd，新连接的fd号也可能≥1024。
+   > glibc的`FD_SETSIZE`是编译期常量，重新定义它也改变不了内核和库里的约定，想突破只能换poll/epoll。
 
 ---
 
 ## 自查方法
 
-- 多个 `nc` 同时连接都能回显，空闲时 CPU 接近 0。
-- 能复现并解释 fd ≥ 1024 时的行为。
+- 多个`nc`同时连接都能回显，空闲时CPU接近0。
+- 能复现并解释fd ≥ 1024时的行为。
+
+---
+
+## 结论
+
+1. **select解决了忙等**：线程睡在select里，空闲时CPU为0，有事件才醒。
+2. **硬限制：fd号必须小于1024**。超过后`FD_SET`/`FD_ISSET`/内核都会越界读写栈内存；FORTIFY会当场终止，
+   不开检查时是悄无声息的内存破坏，可能"看起来正常"。
+3. **O(n)开销**：每轮都要把全部fd交给内核、内核和用户态各扫一遍，代价取决于连接总数而不是活跃数。
+   1000个空闲连接让活跃连接的延迟翻了2～3倍，到1万个连接时扛不住。
+4. 这两个问题分别由poll（去掉fd上限）和epoll（去掉O(n)扫描）解决。
+
+## 踩过的坑
+
+1. **用`rfds`保存连接：** `accept`后`FD_SET(clientfd, &rfds)`，下一轮`FD_ZERO`就清空了，select又会改写它。
+   连接能连上但永远没人读，fd也泄漏。要自己维护`clients[]`数组，每轮重建位图。
+2. **select出错一律`continue`：** 只有`EINTR`该重试；`EBADF`等错误说明位图里有已关闭的fd，是代码bug，继续循环只会刷屏。
+3. **终端`ulimit -n`是1024时撞不到1024的墙，反而撞上`EMFILE`忙循环：** 服务器fd最大只到1023，`FD_SET`不越界；
+   第1021个连接来时`accept4`返回`EMFILE`（Too many open files），**连接留在监听队列里，listenfd一直可读**，
+   select立刻返回、accept又失败……实测2秒刷了7万多行`EMFILE`，CPU 100%，排在队列里的新连接（包括`nc`）永远没回显。
+   select/poll/epoll都有这个问题，常见对策：
+   - 预留一个fd（启动时`open("/dev/null")`），`EMFILE`时关掉它，`accept`一个连接后立刻关掉，再重新打开`/dev/null`（libuv、nginx用过类似做法）；
+   - `EMFILE`后暂时不把listenfd放进位图，过一会儿再恢复；
+   - 根本办法：把`ulimit -n`调到和预期连接数匹配。
+4. **以为"有回显"就没问题：** nofortify版越界后照样能回显，是未定义行为碰巧没出事，不是程序正确。要靠FORTIFY、ASan把它暴露出来。
+5. **用strace测性能：** strace本身的开销比select大得多，会把差别盖住。测延迟要直接在客户端计时。
+
+## 最佳实践
+
+1. 每轮`FD_ZERO`后根据自己的连接列表重建位图，同时重新算`maxfd`，`nfds`传`maxfd + 1`。
+2. `accept`后立刻检查`fd >= FD_SETSIZE`，超过就`close`并拒绝，绝不能交给`FD_SET`。
+3. 就绪的fd只读一次，没读完的下一轮select还会报告；fd设成非阻塞，防止"select说可读、read时又没了"把服务器卡住。
+4. select的`EINTR`重试，其他错误当bug处理。
+5. 开发时用FORTIFY（默认`-O2`即开启）和ASan构建跑一遍，越界问题才能当场暴露。
+6. 连接数可能上千时，不要用select，用poll或epoll。

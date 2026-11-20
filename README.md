@@ -60,7 +60,7 @@ cmake -S 01-blocking-echo -B build-01 && cmake --build build-01
 | 内核                  | Linux 7.0    | epoll 的行为以这个版本为准                                     |
 | CPU                   | 4 个逻辑 CPU | 第 8 节压测、第 9 节多 Reactor                                 |
 | 内存                  | 15 GB        | 第 2 节"一个连接一个线程"能开多少个                            |
-| `ulimit -n`           | 524288       | 一个进程最多打开的 fd 数，C10K 不会卡在这里                    |
+| `ulimit -n`           | 1024（终端默认）| 一个进程最多打开的 fd 数。**做第 4 节以后的实验前要先 `ulimit -n 4096`**（C10K 实验要更大），否则先撞上 `EMFILE` |
 | `ulimit -s`           | 8192 KB      | 每个线程默认栈 8 MB（虚拟内存），第 2 节要算                   |
 | `threads-max`         | 98902        | 整个系统最多的线程数                                           |
 | `FD_SETSIZE`          | 1024         | select 最多监视的 fd 号，第 4 节的核心限制                     |
