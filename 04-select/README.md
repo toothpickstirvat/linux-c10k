@@ -38,11 +38,11 @@ select是最早的I/O多路复用：把一组fd交给内核，内核在任意一
 >
 > **实测（1100个连接）：**
 >
-> | 版本 | 现象 |
-> |---|---|
-> | `server_select`（FORTIFY） | 打印到`fd=1003`后，`*** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated`，退出码134（128+6，SIGABRT） |
-> | `server_select_nofortify` | 不退出，fd一直到1103；再连一个`nc`**居然有回显** |
-> | ASan版`server_select_nofortify` | fd一到1024就报`stack-buffer-overflow`并终止 |
+> | 版本                            | 现象                                                                                                            |
+> |---------------------------------|-----------------------------------------------------------------------------------------------------------------|
+> | `server_select`（FORTIFY）      | 打印到`fd=1003`后，`*** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated`，退出码134（128+6，SIGABRT） |
+> | `server_select_nofortify`       | 不退出，fd一直到1103；再连一个`nc`**居然有回显**                                                                |
+> | ASan版`server_select_nofortify` | fd一到1024就报`stack-buffer-overflow`并终止                                                                     |
 >
 > ASan报告的关键几行：
 >
@@ -56,7 +56,8 @@ select是最早的I/O多路复用：把一组fd交给内核，内核在任意一
 >
 > - `fd_set`内部是16个`long`，16×64=1024位。fd 1024落在第17个`long`上（下标16），越界。
 > - 越界首先发生在第129行的`FD_ISSET`（读），而不是第85行的`FD_SET`：fd 1024是在**这一轮**的accept里得到的，
->   同一轮处理客户端时就对它`FD_ISSET`了，`FD_SET`要到下一轮才执行。越界的其实有三处：`FD_SET`、`FD_ISSET`、内核里的`select`。
+>   同一轮处理客户端时就对它`FD_ISSET`了，`FD_SET`要到下一轮才执行。越界的其实有三处：`FD_SET`、`FD_ISSET`、内核里的
+>   `select`。
 > - **为什么nofortify版有回显：** `FD_SET(1100)`把`rfds`外面某个变量（这里是`ip`或`buf`的内存）的一位写成1，
 >   `select(maxfd+1)`让内核按同样的越界位置读写，`FD_ISSET`又从同一位置读回来，三次越界恰好对上了。
 >   被改的是`buf`这类每次都会被覆盖的缓冲区时看不出问题；换成`maxfd`、`nclient`或指针，就会漏连接、死循环或崩溃。
@@ -78,10 +79,10 @@ python3 04-select/active.py                                 # 终端3：2万次�
 
 > **实测：**
 >
-> | 空闲连接数 | 你的机器 | 我的测量（3次） |
-> |---|---|---|
-> | 10 | 86.7 微秒 | 55.7、68.2、54.6 微秒 |
-> | 1000 | 173.7 微秒 | 186.8、186.1、179.0 微秒 |
+> | 空闲连接数 | 你的机器   | 我的测量（3次）          |
+> |------------|------------|--------------------------|
+> | 10         | 86.7 微秒  | 55.7、68.2、54.6 微秒    |
+> | 1000       | 173.7 微秒 | 186.8、186.1、179.0 微秒 |
 >
 > 多了990个**完全不发数据**的连接，唯一活跃连接的延迟翻了2～3倍。select每轮的开销取决于连接总数，和活跃连接数无关。
 
@@ -143,9 +144,10 @@ python3 04-select/active.py                                 # 终端3：2万次�
    第1021个连接来时`accept4`返回`EMFILE`（Too many open files），**连接留在监听队列里，listenfd一直可读**，
    select立刻返回、accept又失败……实测2秒刷了7万多行`EMFILE`，CPU 100%，排在队列里的新连接（包括`nc`）永远没回显。
    select/poll/epoll都有这个问题，常见对策：
-   - 预留一个fd（启动时`open("/dev/null")`），`EMFILE`时关掉它，`accept`一个连接后立刻关掉，再重新打开`/dev/null`（libuv、nginx用过类似做法）；
-   - `EMFILE`后暂时不把listenfd放进位图，过一会儿再恢复；
-   - 根本办法：把`ulimit -n`调到和预期连接数匹配。
+    - 预留一个fd（启动时`open("/dev/null")`），`EMFILE`时关掉它，`accept`一个连接后立刻关掉，再重新打开`/dev/null`
+      （libuv、nginx用过类似做法）；
+    - `EMFILE`后暂时不把listenfd放进位图，过一会儿再恢复；
+    - 根本办法：把`ulimit -n`调到和预期连接数匹配。
 4. **以为"有回显"就没问题：** nofortify版越界后照样能回显，是未定义行为碰巧没出事，不是程序正确。要靠FORTIFY、ASan把它暴露出来。
 5. **用strace测性能：** strace本身的开销比select大得多，会把差别盖住。测延迟要直接在客户端计时。
 
