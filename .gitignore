@@ -20,3 +20,6 @@ CLAUDE.md
 /build*/
 perf.data*
 core*
+
+# Go 模块文件需要提交（第 10 节）
+!/*/go.mod
