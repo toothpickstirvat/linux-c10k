@@ -151,11 +151,11 @@ static long n_drop = 0; // 连上之后又出错或被对方关闭的连接数
 // 发送一条消息：前 8 字节是当前时间戳，其余补零。
 // 16 字节远小于发送缓冲区，正常不会写不完；写不完会破坏消息边界，按连接出错处理
 static void send_one(conn_t *c, uint64_t now) {
-    char msg[MSG_LEN];
-    memset(msg, 0, sizeof(msg));
-    memcpy(msg, &now, sizeof(now));
-    ssize_t n = write(c->fd, msg, sizeof(msg));
-    if (n == (ssize_t)sizeof(msg)) {
+    // 文本格式：15 位十六进制时间戳 + '\n'，正好 MSG_LEN 字节。以换行结尾，按行分帧的服务器（第 9 节 reactor）才会回显
+    char msg[MSG_LEN + 1]; // snprintf 会多写一个结尾的 '\0'
+    snprintf(msg, sizeof(msg), "%015llx\n", (unsigned long long)now);
+    ssize_t n = write(c->fd, msg, MSG_LEN);
+    if (n == (ssize_t)MSG_LEN) {
         return;
     }
     if (n == -1 && (errno == EAGAIN || errno == EINTR)) {
@@ -172,8 +172,11 @@ static void on_readable(conn_t *c) {
     if (r > 0) {
         c->rlen += (int)r;
         if (c->rlen == MSG_LEN) {
-            uint64_t sent;
-            memcpy(&sent, c->rbuf, sizeof(sent));
+            // 消息是 15 位十六进制文本 + '\n'，要按文本解析回发送时间戳
+            char tmp[MSG_LEN];
+            memcpy(tmp, c->rbuf, MSG_LEN - 1);
+            tmp[MSG_LEN - 1] = '\0';
+            uint64_t sent = strtoull(tmp, NULL, 16);
             uint64_t now = now_ns();
             if (now >= sent) {
                 if (lat_add(now - sent) == -1) {
