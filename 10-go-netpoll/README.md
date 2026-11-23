@@ -82,7 +82,7 @@ ET + 非阻塞fd，只是把“读到EAGAIN就去等”这一步换成了挂起g
 
 3. 文件I/O（读磁盘）为什么不走netpoll？读普通文件时goroutine会怎样？（联系go-concurrency第11节：系统调用时M和P分离）
 
-   > **答（推理得出，本节未实验）：**
+   > **答（前提已实测，后半为推理）：** 实测普通文件注册epoll返回EPERM（Operation not permitted）。
    epoll不支持普通文件，磁盘文件总是“就绪”的，没有EAGAIN可等，没法靠epoll挂起。读普通文件时read真的阻塞在系统调用里，占住线程（M）；这时调度器把P从这个M上摘走交给别的M，继续跑其他goroutine。代价是阻塞的文件I/O会多消耗线程。
 
 ---

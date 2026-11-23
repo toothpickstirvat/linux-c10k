@@ -55,7 +55,7 @@ epoll把“要监视哪些fd”和“等待事件”拆成两个调用：监视�
 
    > **答：** 只有指向这个底层socket的最后一个fd被关闭时才会自动删除。epoll监视的是内核里打开的文件，不是fd号。
    > 实测（socketpair，注册fd后`dup`）：`close`原fd后，epoll仍然能收到事件；副本也关闭后才不再有事件。
-   > fork后子进程还开着同一个socket时同理（本节没有单独实验）。所以服务器关闭连接时，先显式`EPOLL_CTL_DEL`再`close`更稳妥。
+   > fork后同样成立，已实测（socketpair，父进程close后子进程仍持有，epoll仍收到事件；子进程退出后事件才消失）。所以服务器关闭连接时，先显式`EPOLL_CTL_DEL`再`close`更稳妥。
 
 2. 为什么LT下可写事件（`EPOLLOUT`）不能一直注册着？
 
